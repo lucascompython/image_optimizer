@@ -1,0 +1,21 @@
+[package]
+name = "image_optimizer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = [
+    "rayon",
+    "jpeg",
+] }
+fast_image_resize = { version = "5.2", features = ["rayon"] }
+rayon = "1" # look at orx-parallel
+mimalloc = "0.1"
+libwebp-sys = { git = "https://github.com/lucascompython/libwebp-sys", branch = "master" }
+clap = { version = "4.5", features = ["derive"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
