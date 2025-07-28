@@ -6,12 +6,14 @@ edition = "2024"
 [dependencies]
 image = { version = "0.25", default-features = false, features = [
     "rayon",
+    "png",
     "jpeg",
 ] }
 fast_image_resize = { version = "5.2", features = ["rayon"] }
 rayon = "1" # look at orx-parallel
 mimalloc = "0.1"
-libwebp-sys = { git = "https://github.com/lucascompython/libwebp-sys", branch = "master" }
+webp = { git = "https://github.com/lucascompython/webp", branch = "main" }
+
 clap = { version = "4.5", features = ["derive"] }
 
 [profile.release]
