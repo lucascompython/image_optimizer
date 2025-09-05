@@ -65,11 +65,13 @@ fn main() {
                 && let Some(ext) = path.extension()
                 && matches!(ext.to_str().unwrap_or(""), "jpeg" | "jpg")
             {
-                let img = ImageReader::open(&path)
-                    .unwrap()
-                    .decode()
-                    .unwrap()
-                    .into_rgba8();
+                let img_raw = ImageReader::open(&path).unwrap().decode();
+
+                if let Err(e) = img_raw {
+                    eprintln!("Failed to decode image {}: {}", path.display(), e);
+                    return;
+                }
+                let img = img_raw.unwrap().into_rgba8();
 
                 let (w, h) = (img.width(), img.height());
                 let scale = TARGET_WIDTH / w as f32;
@@ -129,12 +131,11 @@ fn main() {
 
                 let webp_data = encoder.encode(40.0);
 
+                let filename_without_extension =
+                    path.file_stem().unwrap().to_string_lossy().to_string();
+
                 std::fs::write(
-                    format!(
-                        "{}/{}.webp",
-                        args.output,
-                        path.file_name().unwrap().to_string_lossy()
-                    ),
+                    format!("{}/{}.webp", args.output, filename_without_extension),
                     &*webp_data,
                 )
                 .unwrap();
