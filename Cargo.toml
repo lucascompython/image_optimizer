@@ -4,17 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = [
-    "rayon",
-    "png",
-    "jpeg",
-] }
-fast_image_resize = { version = "5.3", features = ["rayon"] }
+# fast_image_resize = { version = "5.3", features = ["rayon"] }
 rayon = "1" # look at orx-parallel
 mimalloc = "0.1"
-webp = { git = "https://github.com/lucascompython/webp", branch = "main" }
 
 clap = { version = "4.5", features = ["derive"] }
+rimage = { version = "0.12", default-features = false, features = ["avif", "resize", "threads"] } # update deps
+zune-image = { version = "0.5.0-rc0", default-features = false, features = ["simd", "threads", "jpeg", "png", "metadata"] } # update deps
+zune-imageprocs = "0.5.0-rc0" # update deps
+zune-core = "0.5"
 
 [profile.release]
 lto = true
