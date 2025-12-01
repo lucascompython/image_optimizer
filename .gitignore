@@ -2,4 +2,6 @@
 /input
 /output
 
+test_images/*/processed
+
 rimage
