@@ -304,6 +304,7 @@ pub fn process_batch(
     }
 }
 
+// watermark can probably be leaked and shared via &'static reference
 /// Process a directory of images with the standard directory structure
 ///
 /// Expects input_dir to contain subdirectories with JPEG files.
