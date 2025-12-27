@@ -15,6 +15,8 @@ use zune_image::image::Image;
 use zune_image::traits::{EncoderTrait, OperationsTrait};
 use zune_imageprocs::composite::{Composite, CompositeMethod};
 
+const PROCESSED_DIR: &str = "Resized";
+
 /// Watermark data for compositing onto images
 pub struct Watermark {
     image: Image,
@@ -124,7 +126,7 @@ impl From<io::Error> for ProcessingError {
 /// Process a single JPEG image from bytes and return AVIF bytes
 pub fn process_image_bytes(
     jpeg_data: &[u8],
-    watermark: &Watermark,
+    watermark: Option<&Watermark>,
     options: ProcessingOptions,
 ) -> Result<Vec<u8>, ProcessingError> {
     let decoder_options = DecoderOptions::new_fast();
@@ -151,16 +153,18 @@ pub fn process_image_bytes(
         return Err(ProcessingError::Resize);
     }
 
-    let x_offset = (options.target_width - watermark.width) / 2;
-    let y_offset = (target_height - watermark.height) / 2;
-    let composite = Composite::new(
-        &watermark.image,
-        CompositeMethod::Over,
-        (x_offset, y_offset),
-    );
+    if let Some(watermark) = watermark {
+        let x_offset = (options.target_width - watermark.width) / 2;
+        let y_offset = (target_height - watermark.height) / 2;
+        let composite = Composite::new(
+            &watermark.image,
+            CompositeMethod::Over,
+            (x_offset, y_offset),
+        );
 
-    if composite.execute(&mut img).is_err() {
-        return Err(ProcessingError::Watermark);
+        if composite.execute(&mut img).is_err() {
+            return Err(ProcessingError::Watermark);
+        }
     }
 
     let avif_encoder_options = AvifOptions {
@@ -182,7 +186,7 @@ pub fn process_image_bytes(
 pub fn process_image_file(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
-    watermark: &Watermark,
+    watermark: Option<&Watermark>,
     options: ProcessingOptions,
 ) -> Result<(), ProcessingError> {
     let data = fs::read(input_path)?;
@@ -218,7 +222,7 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
                             .extension()
                             .is_some_and(|ext| matches!(ext.to_str().unwrap_or(""), "jpeg" | "jpg"))
                     {
-                        let processed_dir = dir_path.join("processed");
+                        let processed_dir = dir_path.join(PROCESSED_DIR);
                         Some((processed_dir, sub_path))
                     } else {
                         None
@@ -239,7 +243,7 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
 /// * `num_threads` - Number of worker threads (None for auto-detect based on CPU cores)
 pub fn process_batch(
     files: Vec<(PathBuf, PathBuf)>,
-    watermark: Watermark,
+    watermark: Option<Watermark>,
     options: ProcessingOptions,
     num_threads: Option<usize>,
 ) -> BatchResult {
@@ -271,7 +275,7 @@ pub fn process_batch(
             let work_index = &work_index;
             let successful = &successful;
             let failed = &failed;
-            let watermark = &watermark;
+            let watermark = watermark.as_ref();
 
             scope.spawn(move || {
                 loop {
@@ -281,8 +285,10 @@ pub fn process_batch(
                     }
 
                     let (processed_dir, file_path) = &files[idx];
-                    let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                    let output_path = processed_dir.join(format!("{}.avif", filename));
+                    // let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
+                    // let output_path = processed_dir.join(format!("{}.avif", filename));
+                    let filename = file_path.file_name().unwrap();
+                    let output_path = processed_dir.join(filename);
 
                     match process_image_file(file_path, output_path, watermark, options) {
                         Ok(()) => {
@@ -311,7 +317,7 @@ pub fn process_batch(
 /// Creates "processed" subdirectories with AVIF output files.
 pub fn process_directory(
     input_dir: impl AsRef<Path>,
-    watermark: Watermark,
+    watermark: Option<Watermark>,
     options: ProcessingOptions,
     num_threads: Option<usize>,
 ) -> io::Result<BatchResult> {

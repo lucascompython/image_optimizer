@@ -17,7 +17,7 @@ struct Args {
 
     /// Path to the watermark file
     #[clap(short, long)]
-    watermark: String,
+    watermark: Option<String>,
 
     /// AVIF encoding speed (1-10). Lower = smaller files but slower.
     #[clap(short, long, default_value = "1")]
@@ -35,12 +35,15 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let watermark = match Watermark::from_file(&args.watermark) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to load watermark '{}': {}", args.watermark, e);
-            process::exit(1);
-        }
+    let watermark = match &args.watermark {
+        Some(path) => match Watermark::from_file(path) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("Failed to load watermark '{}': {}", path, e);
+                process::exit(1);
+            }
+        },
+        None => None,
     };
 
     let options = ProcessingOptions::new(args.width, args.speed);
