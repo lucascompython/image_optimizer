@@ -18,10 +18,10 @@ cli = ["clap", "mimalloc"]
 
 [dependencies]
 # CLI
-mimalloc = {version = "0.1", features = ["v3"], optional = true }
+mimalloc = { version = "0.1", features = ["v3"], optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
 
-rimage = { path = "../rimage", default-features = false, features = ["avif", "resize", "threads"] }
+rimage = { git = "https://github.com/lucascompython/rimage", branch = "main", default-features = false, features = ["avif", "resize", "threads"] }
 zune-image = { version = "0.5.0-rc0", default-features = false, features = ["simd", "threads", "jpeg", "png", "metadata"] }
 zune-imageprocs = "0.5.0-rc0"
 zune-core = "0.5"
