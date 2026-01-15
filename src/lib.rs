@@ -17,7 +17,6 @@ use zune_imageprocs::composite::{Composite, CompositeMethod};
 
 const PROCESSED_DIR: &str = "Resized";
 
-/// Watermark data for compositing onto images
 pub struct Watermark {
     image: Image,
     width: usize,
@@ -25,13 +24,11 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// Load a watermark from a PNG file path
     pub fn from_file(path: impl AsRef<Path>) -> io::Result<Self> {
         let data = fs::read(path)?;
         Self::from_bytes(&data)
     }
 
-    /// Load a watermark from PNG bytes
     pub fn from_bytes(data: &[u8]) -> io::Result<Self> {
         let decoder_options = DecoderOptions::new_fast();
         let decoder = PngDecoder::new_with_options(ZCursor::new(data.to_vec()), decoder_options);
@@ -46,7 +43,6 @@ impl Watermark {
         })
     }
 
-    /// Get watermark dimensions
     pub fn dimensions(&self) -> (usize, usize) {
         (self.width, self.height)
     }
@@ -195,12 +191,10 @@ pub fn process_image_file(
     Ok(())
 }
 
-/// Result of batch processing
 #[derive(Debug, Default)]
 pub struct BatchResult {
     pub successful: usize,
     pub failed: usize,
-    pub errors: Vec<(PathBuf, ProcessingError)>,
 }
 
 /// Collect all JPEG files from a directory (with subdirectory structure)
@@ -234,7 +228,7 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
     Ok(files)
 }
 
-/// Process multiple images in parallel using scoped threads (no memory leaks)
+/// Process multiple images in parallel using scoped threads
 ///
 /// # Arguments
 /// * `files` - Vec of (output_directory, input_file_path)
@@ -287,7 +281,7 @@ pub fn process_batch(
                     let (processed_dir, file_path) = &files[idx];
                     // let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
                     // let output_path = processed_dir.join(format!("{}.avif", filename));
-                    let filename = file_path.file_name().unwrap();
+                    let filename = file_path.file_name().unwrap(); // Right now this writes the file with the original file name, including the file extension
                     let output_path = processed_dir.join(filename);
 
                     match process_image_file(file_path, output_path, watermark, options) {
@@ -306,7 +300,6 @@ pub fn process_batch(
     BatchResult {
         successful: successful.load(Ordering::Relaxed),
         failed: failed.load(Ordering::Relaxed),
-        errors: Vec::new(), // Errors not collected in parallel version for simplicity
     }
 }
 
