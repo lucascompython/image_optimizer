@@ -303,6 +303,92 @@ pub fn process_batch(
     }
 }
 
+/// Process multiple images in parallel while reading input bytes eagerly into memory.
+/// This keeps processing CPU-bound and reduces disk reads during worker execution.
+pub fn process_batch_in_memory(
+    files: Vec<(PathBuf, PathBuf)>,
+    watermark: Option<Watermark>,
+    options: ProcessingOptions,
+    num_threads: Option<usize>,
+) -> BatchResult {
+    if files.is_empty() {
+        return BatchResult::default();
+    }
+
+    let mut in_memory_work: Vec<(PathBuf, PathBuf, Vec<u8>)> = Vec::with_capacity(files.len());
+    let mut preload_failed = 0usize;
+
+    for (processed_dir, file_path) in files {
+        match fs::read(&file_path) {
+            Ok(bytes) => in_memory_work.push((processed_dir, file_path, bytes)),
+            Err(_) => preload_failed += 1,
+        }
+    }
+
+    if in_memory_work.is_empty() {
+        return BatchResult {
+            successful: 0,
+            failed: preload_failed,
+        };
+    }
+
+    let num_workers = num_threads.unwrap_or_else(|| {
+        thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4)
+    });
+
+    let unique_dirs: HashSet<&PathBuf> = in_memory_work.iter().map(|(dir, _, _)| dir).collect();
+    for dir in unique_dirs {
+        let _ = fs::create_dir_all(dir);
+    }
+
+    let work_index = AtomicUsize::new(0);
+    let successful = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(preload_failed);
+
+    thread::scope(|scope| {
+        for _ in 0..num_workers {
+            let work = &in_memory_work;
+            let work_index = &work_index;
+            let successful = &successful;
+            let failed = &failed;
+            let watermark = watermark.as_ref();
+
+            scope.spawn(move || {
+                loop {
+                    let idx = work_index.fetch_add(1, Ordering::Relaxed);
+                    if idx >= work.len() {
+                        break;
+                    }
+
+                    let (processed_dir, file_path, jpeg_bytes) = &work[idx];
+                    let filename = file_path.file_name().unwrap();
+                    let output_path = processed_dir.join(filename);
+
+                    match process_image_bytes(jpeg_bytes, watermark, options) {
+                        Ok(result) => {
+                            if fs::write(output_path, result).is_ok() {
+                                successful.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                failed.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Err(_) => {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    BatchResult {
+        successful: successful.load(Ordering::Relaxed),
+        failed: failed.load(Ordering::Relaxed),
+    }
+}
+
 // watermark can probably be leaked and shared via &'static reference
 /// Process a directory of images with the standard directory structure
 ///
@@ -315,5 +401,5 @@ pub fn process_directory(
     num_threads: Option<usize>,
 ) -> io::Result<BatchResult> {
     let files = collect_jpeg_files(input_dir)?;
-    Ok(process_batch(files, watermark, options, num_threads))
+    Ok(process_batch_in_memory(files, watermark, options, num_threads))
 }
