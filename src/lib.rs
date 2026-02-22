@@ -199,6 +199,7 @@ pub struct BatchResult {
 
 /// Collect all JPEG files from a directory (with subdirectory structure)
 /// Returns Vec of (processed_dir, file_path)
+/// Be careful this function deletes all the files that don't have a .jpg or .jpeg extension
 pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBuf, PathBuf)>> {
     let files: Vec<(PathBuf, PathBuf)> = fs::read_dir(input_dir)?
         .filter_map(|entry| entry.ok())
@@ -211,13 +212,19 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
                 .filter_map(|sub_entry| sub_entry.ok())
                 .filter_map(move |sub_entry| {
                     let sub_path = sub_entry.path();
-                    if sub_path.is_file()
-                        && sub_path
-                            .extension()
-                            .is_some_and(|ext| matches!(ext.to_str().unwrap_or(""), "jpeg" | "jpg"))
-                    {
-                        let processed_dir = dir_path.join(PROCESSED_DIR);
-                        Some((processed_dir, sub_path))
+                    if sub_path.is_file() {
+                        if sub_path.extension().is_some_and(|ext| {
+                            matches!(
+                                ext.to_ascii_lowercase().to_str().unwrap_or(""),
+                                "jpeg" | "jpg"
+                            )
+                        }) {
+                            let processed_dir = dir_path.join(PROCESSED_DIR);
+                            Some((processed_dir, sub_path))
+                        } else {
+                            fs::remove_file(&sub_path).unwrap();
+                            None
+                        }
                     } else {
                         None
                     }
@@ -401,5 +408,10 @@ pub fn process_directory(
     num_threads: Option<usize>,
 ) -> io::Result<BatchResult> {
     let files = collect_jpeg_files(input_dir)?;
-    Ok(process_batch_in_memory(files, watermark, options, num_threads))
+    Ok(process_batch_in_memory(
+        files,
+        watermark,
+        options,
+        num_threads,
+    ))
 }
