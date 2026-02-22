@@ -286,10 +286,10 @@ pub fn process_batch(
                     }
 
                     let (processed_dir, file_path) = &files[idx];
-                    // let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                    // let output_path = processed_dir.join(format!("{}.avif", filename));
-                    let filename = file_path.file_name().unwrap(); // Right now this writes the file with the original file name, including the file extension
-                    let output_path = processed_dir.join(filename);
+                    let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
+                    let output_path = processed_dir.join(format!("{}.avif", filename));
+                    // let filename = file_path.file_name().unwrap(); // Right now this writes the file with the original file name, including the file extension
+                    // let output_path = processed_dir.join(filename);
 
                     match process_image_file(file_path, output_path, watermark, options) {
                         Ok(()) => {
@@ -370,8 +370,11 @@ pub fn process_batch_in_memory(
                     }
 
                     let (processed_dir, file_path, jpeg_bytes) = &work[idx];
-                    let filename = file_path.file_name().unwrap();
-                    let output_path = processed_dir.join(filename);
+                    // let filename = file_path.file_name().unwrap();
+                    // let output_path = processed_dir.join(filename);
+
+                    let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
+                    let output_path = processed_dir.join(format!("{}.avif", filename));
 
                     match process_image_bytes(jpeg_bytes, watermark, options) {
                         Ok(result) => {
