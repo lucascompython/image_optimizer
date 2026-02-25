@@ -1,11 +1,11 @@
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 use rimage::codecs::avif::{AvifEncoder, AvifOptions};
 use rimage::operations::resize::{Resize, ResizeAlg};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
@@ -197,6 +197,11 @@ pub struct BatchResult {
     pub failed: usize,
 }
 
+struct CallbackWorkItem {
+    output_relative_path: PathBuf,
+    input_file_path: PathBuf,
+}
+
 /// Collect all JPEG files from a directory (with subdirectory structure)
 /// Returns Vec of (processed_dir, file_path)
 /// Be careful this function deletes all the files that don't have a .jpg or .jpeg extension
@@ -219,6 +224,7 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
                                 "jpeg" | "jpg"
                             )
                         }) {
+                            // TODO: in the future, when I don't need to have a "processed" subdirectory, we can just remove this
                             let processed_dir = dir_path.join(PROCESSED_DIR);
                             Some((processed_dir, sub_path))
                         } else {
@@ -252,62 +258,38 @@ pub fn process_batch(
         return BatchResult::default();
     }
 
-    let num_workers = num_threads.unwrap_or_else(|| {
-        thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4)
-    });
-
     let unique_dirs: HashSet<&PathBuf> = files.iter().map(|(dir, _)| dir).collect();
     for dir in unique_dirs {
         let _ = fs::create_dir_all(dir);
     }
 
-    let work_index = AtomicUsize::new(0);
-    let successful = AtomicUsize::new(0);
-    let failed = AtomicUsize::new(0);
+    let run = || {
+        let watermark = watermark.as_ref();
+        files
+            .par_iter()
+            .map(|(processed_dir, file_path)| {
+                let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
+                let output_path = processed_dir.join(format!("{}.avif", filename));
 
-    // Use scoped threads to avoid 'static lifetime requirements
-    // This ensures all threads complete before the function returns
-    // and all borrowed data is valid for the duration
-    thread::scope(|scope| {
-        for _ in 0..num_workers {
-            let files = &files;
-            let work_index = &work_index;
-            let successful = &successful;
-            let failed = &failed;
-            let watermark = watermark.as_ref();
-
-            scope.spawn(move || {
-                loop {
-                    let idx = work_index.fetch_add(1, Ordering::Relaxed);
-                    if idx >= files.len() {
-                        break;
-                    }
-
-                    let (processed_dir, file_path) = &files[idx];
-                    let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                    let output_path = processed_dir.join(format!("{}.avif", filename));
-                    // let filename = file_path.file_name().unwrap(); // Right now this writes the file with the original file name, including the file extension
-                    // let output_path = processed_dir.join(filename);
-
-                    match process_image_file(file_path, output_path, watermark, options) {
-                        Ok(()) => {
-                            successful.fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(_) => {
-                            failed.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
+                if process_image_file(file_path, output_path, watermark, options).is_ok() {
+                    (1usize, 0usize)
+                } else {
+                    (0usize, 1usize)
                 }
-            });
-        }
-    });
+            })
+            .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
+    };
 
-    BatchResult {
-        successful: successful.load(Ordering::Relaxed),
-        failed: failed.load(Ordering::Relaxed),
-    }
+    let (successful, failed) = if let Some(threads) = num_threads {
+        match ThreadPoolBuilder::new().num_threads(threads).build() {
+            Ok(pool) => pool.install(run),
+            Err(_) => run(),
+        }
+    } else {
+        run()
+    };
+
+    BatchResult { successful, failed }
 }
 
 /// Process multiple images in parallel while reading input bytes eagerly into memory.
@@ -339,63 +321,45 @@ pub fn process_batch_in_memory(
         };
     }
 
-    let num_workers = num_threads.unwrap_or_else(|| {
-        thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4)
-    });
-
     let unique_dirs: HashSet<&PathBuf> = in_memory_work.iter().map(|(dir, _, _)| dir).collect();
     for dir in unique_dirs {
         let _ = fs::create_dir_all(dir);
     }
 
-    let work_index = AtomicUsize::new(0);
-    let successful = AtomicUsize::new(0);
-    let failed = AtomicUsize::new(preload_failed);
+    let run = || {
+        let watermark = watermark.as_ref();
+        in_memory_work
+            .par_iter()
+            .map(|(processed_dir, file_path, jpeg_bytes)| {
+                let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
+                let output_path = processed_dir.join(format!("{}.avif", filename));
 
-    thread::scope(|scope| {
-        for _ in 0..num_workers {
-            let work = &in_memory_work;
-            let work_index = &work_index;
-            let successful = &successful;
-            let failed = &failed;
-            let watermark = watermark.as_ref();
-
-            scope.spawn(move || {
-                loop {
-                    let idx = work_index.fetch_add(1, Ordering::Relaxed);
-                    if idx >= work.len() {
-                        break;
-                    }
-
-                    let (processed_dir, file_path, jpeg_bytes) = &work[idx];
-                    // let filename = file_path.file_name().unwrap();
-                    // let output_path = processed_dir.join(filename);
-
-                    let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                    let output_path = processed_dir.join(format!("{}.avif", filename));
-
-                    match process_image_bytes(jpeg_bytes, watermark, options) {
-                        Ok(result) => {
-                            if fs::write(output_path, result).is_ok() {
-                                successful.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                failed.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-                        Err(_) => {
-                            failed.fetch_add(1, Ordering::Relaxed);
+                match process_image_bytes(jpeg_bytes, watermark, options) {
+                    Ok(result) => {
+                        if fs::write(output_path, result).is_ok() {
+                            (1usize, 0usize)
+                        } else {
+                            (0usize, 1usize)
                         }
                     }
+                    Err(_) => (0usize, 1usize),
                 }
-            });
+            })
+            .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
+    };
+
+    let (successful, failed_from_processing) = if let Some(threads) = num_threads {
+        match ThreadPoolBuilder::new().num_threads(threads).build() {
+            Ok(pool) => pool.install(run),
+            Err(_) => run(),
         }
-    });
+    } else {
+        run()
+    };
 
     BatchResult {
-        successful: successful.load(Ordering::Relaxed),
-        failed: failed.load(Ordering::Relaxed),
+        successful,
+        failed: preload_failed + failed_from_processing,
     }
 }
 
@@ -417,4 +381,88 @@ pub fn process_directory(
         options,
         num_threads,
     ))
+}
+
+pub fn process_directory_with_callback<F>(
+    input_dir: impl AsRef<Path>,
+    watermark: Option<Watermark>,
+    options: ProcessingOptions,
+    num_threads: Option<usize>,
+    on_processed: F,
+) -> io::Result<BatchResult>
+where
+    F: Fn(&Path, Vec<u8>) -> io::Result<()> + Send + Sync,
+{
+    let input_dir = input_dir.as_ref().to_path_buf();
+    let files = collect_jpeg_files(&input_dir)?;
+
+    if files.is_empty() {
+        return Ok(BatchResult::default());
+    }
+
+    let mut work_items = Vec::with_capacity(files.len());
+    for (processed_dir, file_path) in files {
+        let relative_dir = match processed_dir.strip_prefix(&input_dir) {
+            Ok(relative) => relative,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "processed directory is outside input directory",
+                ));
+            }
+        };
+
+        let callback_output_dir = if relative_dir
+            .file_name()
+            .and_then(|segment| segment.to_str())
+            .is_some_and(|segment| segment == PROCESSED_DIR)
+        {
+            relative_dir.parent().unwrap_or(Path::new(""))
+        } else {
+            relative_dir
+        };
+
+        let filename = file_path.file_stem().unwrap();
+        let output_relative_path = callback_output_dir.join(format!("{}.avif", filename.display()));
+
+        work_items.push(CallbackWorkItem {
+            output_relative_path,
+            input_file_path: file_path,
+        });
+    }
+
+    let run = || {
+        let watermark = watermark.as_ref();
+        work_items
+            .par_iter()
+            .map(|item| {
+                let jpeg_data = match fs::read(&item.input_file_path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return (0usize, 1usize),
+                };
+
+                let avif_data = match process_image_bytes(&jpeg_data, watermark, options) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return (0usize, 1usize),
+                };
+
+                if on_processed(item.output_relative_path.as_ref(), avif_data).is_ok() {
+                    (1usize, 0usize)
+                } else {
+                    (0usize, 1usize)
+                }
+            })
+            .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
+    };
+
+    let (successful, failed) = if let Some(threads) = num_threads {
+        match ThreadPoolBuilder::new().num_threads(threads).build() {
+            Ok(pool) => pool.install(run),
+            Err(_) => run(),
+        }
+    } else {
+        run()
+    };
+
+    Ok(BatchResult { successful, failed })
 }
