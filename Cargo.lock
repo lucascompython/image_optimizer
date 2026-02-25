@@ -532,6 +532,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "mimalloc",
+ "rayon",
  "rimage",
  "zune-core",
  "zune-image",
