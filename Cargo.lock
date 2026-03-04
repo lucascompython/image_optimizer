@@ -532,6 +532,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "mimalloc",
+ "rapidhash",
  "rayon",
  "rimage",
  "zune-core",
@@ -1227,6 +1228,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom",
+]
+
+[[package]]
+name = "rapidhash"
+version = "4.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5e48930979c155e2f33aa36ab3119b5ee81332beb6482199a8ecd6029b80b59"
+dependencies = [
+ "rand_core",
+ "rustversion",
 ]
 
 [[package]]

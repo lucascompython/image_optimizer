@@ -26,6 +26,7 @@ zune-image = { version = "0.5", default-features = false, features = ["simd", "t
 zune-imageprocs = "0.5"
 zune-core = "0.5"
 rayon = "1"
+rapidhash = { version = "4.4", features = ["nightly", "unsafe", "rng"] }
 
 [profile.release]
 lto = true

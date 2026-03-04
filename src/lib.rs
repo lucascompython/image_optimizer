@@ -2,7 +2,6 @@ use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use rimage::codecs::avif::{AvifEncoder, AvifOptions};
 use rimage::operations::resize::{Resize, ResizeAlg};
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -258,7 +257,7 @@ pub fn process_batch(
         return BatchResult::default();
     }
 
-    let unique_dirs: HashSet<&PathBuf> = files.iter().map(|(dir, _)| dir).collect();
+    let unique_dirs: rapidhash::RapidHashSet<&PathBuf> = files.iter().map(|(dir, _)| dir).collect();
     for dir in unique_dirs {
         let _ = fs::create_dir_all(dir);
     }
@@ -324,7 +323,7 @@ pub fn process_batch_in_memory(
         };
     }
 
-    let unique_dirs: std::collections::HashSet<&PathBuf> =
+    let unique_dirs: rapidhash::RapidHashSet<&PathBuf> =
         in_memory_work.iter().map(|(dir, _, _)| dir).collect();
     for dir in unique_dirs {
         let _ = fs::create_dir_all(dir);
