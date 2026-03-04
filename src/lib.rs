@@ -280,14 +280,17 @@ pub fn process_batch(
             .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
     };
 
-    let (successful, failed) = if let Some(threads) = num_threads {
-        match ThreadPoolBuilder::new().num_threads(threads).build() {
-            Ok(pool) => pool.install(run),
-            Err(_) => run(),
-        }
-    } else {
-        run()
-    };
+    let pool_threads = num_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(pool_threads)
+        .build()
+        .unwrap_or_else(|_| ThreadPoolBuilder::new().build().unwrap());
+
+    let (successful, failed) = pool.install(run);
 
     BatchResult { successful, failed }
 }
@@ -321,20 +324,35 @@ pub fn process_batch_in_memory(
         };
     }
 
-    let unique_dirs: HashSet<&PathBuf> = in_memory_work.iter().map(|(dir, _, _)| dir).collect();
+    let unique_dirs: std::collections::HashSet<&PathBuf> =
+        in_memory_work.iter().map(|(dir, _, _)| dir).collect();
     for dir in unique_dirs {
         let _ = fs::create_dir_all(dir);
     }
 
-    let run = || {
-        let watermark = watermark.as_ref();
-        in_memory_work
-            .par_iter()
-            .map(|(processed_dir, file_path, jpeg_bytes)| {
-                let filename = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                let output_path = processed_dir.join(format!("{}.avif", filename));
+    let num_threads = num_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
 
-                match process_image_bytes(jpeg_bytes, watermark, options) {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap_or_else(|_| ThreadPoolBuilder::new().build().unwrap());
+
+    let watermark_ref = watermark.as_ref();
+
+    let (successful, failed_from_processing) = pool.install(|| {
+        in_memory_work
+            .into_par_iter()
+            .map(|(processed_dir, file_path, jpeg_bytes)| {
+                let filename = file_path.file_name().unwrap_or_default();
+                // let output_path = processed_dir.join(filename);
+                let output_path: PathBuf =
+                    processed_dir.join(format!("{}.avif", filename.display()));
+
+                match process_image_bytes(&jpeg_bytes, watermark_ref, options) {
                     Ok(result) => {
                         if fs::write(output_path, result).is_ok() {
                             (1usize, 0usize)
@@ -346,16 +364,7 @@ pub fn process_batch_in_memory(
                 }
             })
             .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
-    };
-
-    let (successful, failed_from_processing) = if let Some(threads) = num_threads {
-        match ThreadPoolBuilder::new().num_threads(threads).build() {
-            Ok(pool) => pool.install(run),
-            Err(_) => run(),
-        }
-    } else {
-        run()
-    };
+    });
 
     BatchResult {
         successful,
@@ -425,6 +434,9 @@ where
         let filename = file_path.file_stem().unwrap();
         let output_relative_path = callback_output_dir.join(format!("{}.avif", filename.display()));
 
+        // let filename = file_path.file_name().unwrap();
+        // let output_relative_path = callback_output_dir.join(filename);
+
         work_items.push(CallbackWorkItem {
             output_relative_path,
             input_file_path: file_path,
@@ -455,14 +467,17 @@ where
             .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
     };
 
-    let (successful, failed) = if let Some(threads) = num_threads {
-        match ThreadPoolBuilder::new().num_threads(threads).build() {
-            Ok(pool) => pool.install(run),
-            Err(_) => run(),
-        }
-    } else {
-        run()
-    };
+    let pool_threads = num_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(pool_threads)
+        .build()
+        .unwrap_or_else(|_| ThreadPoolBuilder::new().build().unwrap());
+
+    let (successful, failed) = pool.install(run);
 
     Ok(BatchResult { successful, failed })
 }
