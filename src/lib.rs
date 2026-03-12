@@ -129,17 +129,25 @@ impl From<io::Error> for ProcessingError {
     }
 }
 
-/// Process a single JPEG image from bytes and return AVIF bytes
+/// Process an image (JPEG or PNG) from bytes and return AVIF bytes.
+/// Format is detected automatically via magic bytes.
 pub fn process_image_bytes(
-    jpeg_data: &[u8],
+    image_data: &[u8],
     watermark: Option<&Watermark>,
     options: ProcessingOptions,
 ) -> Result<Vec<u8>, ProcessingError> {
     let decoder_options = DecoderOptions::new_fast();
-    let decoder = JpegDecoder::new_with_options(ZCursor::new(jpeg_data.to_vec()), decoder_options);
+    let cursor = ZCursor::new(image_data.to_vec());
 
-    let mut img =
-        Image::from_decoder(decoder).map_err(|e| ProcessingError::Decode(e.to_string()))?;
+    let mut img = if image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        // PNG magic bytes
+        let decoder = PngDecoder::new_with_options(cursor, decoder_options);
+        Image::from_decoder(decoder).map_err(|e| ProcessingError::Decode(e.to_string()))?
+    } else {
+        // Default to JPEG
+        let decoder = JpegDecoder::new_with_options(cursor, decoder_options);
+        Image::from_decoder(decoder).map_err(|e| ProcessingError::Decode(e.to_string()))?
+    };
 
     if img.convert_color(ColorSpace::RGBA).is_err() {
         return Err(ProcessingError::ColorConversion);
@@ -160,8 +168,9 @@ pub fn process_image_bytes(
     }
 
     if let Some(watermark) = watermark {
-        let x_offset = (options.target_width - watermark.width) / 2;
-        let y_offset = (target_height - watermark.height) / 2;
+        // TODO: See if we actually need saturating_sub
+        let x_offset = options.target_width.saturating_sub(watermark.width) / 2;
+        let y_offset = target_height.saturating_sub(watermark.height) / 2;
         let composite = Composite::new(
             &watermark.image,
             CompositeMethod::Over,
@@ -188,7 +197,7 @@ pub fn process_image_bytes(
     Ok(result)
 }
 
-/// Process a single JPEG file and write the result to an output path
+/// Process a single image file (JPEG or PNG) and write the result to an output path
 pub fn process_image_file(
     input_path: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
