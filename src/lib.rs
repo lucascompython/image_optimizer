@@ -1,8 +1,10 @@
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use rimage::codecs::avif::{AvifEncoder, AvifOptions};
-use rimage::operations::resize::{Resize, ResizeAlg};
+use rimage::operations::resize::{FilterType, Resize, ResizeAlg};
 use std::fs;
+
+pub use rimage::operations::resize::FilterType as ResizeFilter;
 use std::io;
 use std::path::{Path, PathBuf};
 use zune_core::bytestream::ZCursor;
@@ -59,6 +61,8 @@ pub struct ProcessingOptions {
     pub target_width: usize,
     /// AVIF encoding speed (1-10). Lower = smaller files but slower.
     pub avif_speed: u8,
+    /// Resize filter type. Lanczos3 is highest quality, Bilinear is faster.
+    pub filter_type: FilterType,
 }
 
 impl Default for ProcessingOptions {
@@ -66,6 +70,7 @@ impl Default for ProcessingOptions {
         Self {
             target_width: 800,
             avif_speed: 1,
+            filter_type: FilterType::Bilinear,
         }
     }
 }
@@ -75,7 +80,13 @@ impl ProcessingOptions {
         Self {
             target_width,
             avif_speed: avif_speed.clamp(1, 10),
+            filter_type: FilterType::Bilinear,
         }
+    }
+
+    pub fn with_filter(mut self, filter_type: FilterType) -> Self {
+        self.filter_type = filter_type;
+        self
     }
 }
 
@@ -141,7 +152,7 @@ pub fn process_image_bytes(
     let resize = Resize::new(
         options.target_width,
         target_height,
-        ResizeAlg::Convolution(rimage::operations::resize::FilterType::Bilinear),
+        ResizeAlg::Convolution(options.filter_type),
     );
 
     if resize.execute(&mut img).is_err() {
