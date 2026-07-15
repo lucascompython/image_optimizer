@@ -434,6 +434,7 @@ pub fn process_directory(
 ///
 /// Reads JPEG files directly from `input_dir` (non-recursive, ignores subdirectories)
 /// and writes them into `output_dir` with the same filename stem but `.avif` extension.
+/// Each worker reads its own file — peak memory is bounded by `num_threads × 1 file`.
 ///
 /// # Arguments
 /// * `input_dir` - Directory containing JPEG files
@@ -457,23 +458,15 @@ pub fn process_directory_flat(
 
     fs::create_dir_all(&output_dir)?;
 
-    // Preload all files into memory
-    let mut in_memory: Vec<(PathBuf, Vec<u8>)> = Vec::with_capacity(files.len());
-    let mut preload_failed = 0usize;
-
-    for path in &files {
-        match fs::read(path) {
-            Ok(bytes) => in_memory.push((path.clone(), bytes)),
-            Err(_) => preload_failed += 1,
-        }
-    }
-
-    if in_memory.is_empty() {
-        return Ok(BatchResult {
-            successful: 0,
-            failed: preload_failed,
-        });
-    }
+    // Build (input_path, output_path) pairs up front — cheap, just path manipulation
+    let work: Vec<(PathBuf, PathBuf)> = files
+        .into_iter()
+        .map(|path| {
+            let stem = path.file_stem().unwrap_or_default();
+            let output = output_dir.join(format!("{}.avif", stem.display()));
+            (path, output)
+        })
+        .collect();
 
     let num_threads = num_threads.unwrap_or_else(|| {
         std::thread::available_parallelism()
@@ -488,15 +481,16 @@ pub fn process_directory_flat(
 
     let watermark_ref = watermark.as_ref();
 
-    let (successful, failed_from_processing) = pool.install(|| {
-        in_memory
-            .into_par_iter()
-            .map(|(input_path, bytes)| {
-                let stem = input_path.file_stem().unwrap_or_default();
-                let output_path = output_dir.join(format!("{}.avif", stem.display()));
-                match process_image_bytes(&bytes, watermark_ref, options) {
-                    Ok(result) => {
-                        if fs::write(output_path, result).is_ok() {
+    let (successful, failed) = pool.install(|| {
+        work.into_par_iter()
+            .map(|(input_path, output_path)| {
+                let jpeg_bytes = match fs::read(&input_path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return (0usize, 1usize),
+                };
+                match process_image_bytes(&jpeg_bytes, watermark_ref, options) {
+                    Ok(avif) => {
+                        if fs::write(output_path, avif).is_ok() {
                             (1usize, 0usize)
                         } else {
                             (0usize, 1usize)
@@ -508,10 +502,7 @@ pub fn process_directory_flat(
             .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
     });
 
-    Ok(BatchResult {
-        successful,
-        failed: preload_failed + failed_from_processing,
-    })
+    Ok(BatchResult { successful, failed })
 }
 
 pub fn process_directory_with_callback<F>(
