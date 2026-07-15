@@ -1,4 +1,4 @@
-use image_optimizer::{ProcessingOptions, Watermark, process_directory};
+use image_optimizer::{ProcessingOptions, Watermark, process_directory, process_directory_flat};
 use std::process;
 
 use clap::Parser;
@@ -30,6 +30,14 @@ struct Args {
     /// Target width for resized images
     #[clap(long, default_value = "800")]
     width: usize,
+
+    /// Output directory for processed AVIF files
+    #[clap(short, long)]
+    output: Option<String>,
+
+    /// Flat output mode: read JPEGs directly from input folder, output flat to --output with sequential names
+    #[clap(long)]
+    flat: bool,
 }
 
 fn main() {
@@ -58,16 +66,39 @@ fn main() {
             .unwrap_or_else(|| "auto".to_string())
     );
 
-    match process_directory(&args.input, watermark, options, args.threads) {
-        Ok(result) => {
-            println!(
-                "Processing complete: {} successful, {} failed",
-                result.successful, result.failed
-            );
+    if args.flat {
+        let output_dir = match &args.output {
+            Some(dir) => dir.clone(),
+            None => {
+                eprintln!("--output is required when using --flat");
+                process::exit(1);
+            }
+        };
+        println!("Output mode: flat -> '{}'", output_dir);
+        match process_directory_flat(&args.input, &output_dir, watermark, options, args.threads) {
+            Ok(result) => {
+                println!(
+                    "Processing complete: {} successful, {} failed",
+                    result.successful, result.failed
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to process directory: {}", e);
+                process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to process directory: {}", e);
-            process::exit(1);
+    } else {
+        match process_directory(&args.input, watermark, options, args.threads) {
+            Ok(result) => {
+                println!(
+                    "Processing complete: {} successful, {} failed",
+                    result.successful, result.failed
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to process directory: {}", e);
+                process::exit(1);
+            }
         }
     }
 }

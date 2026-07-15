@@ -260,6 +260,24 @@ pub fn collect_jpeg_files(input_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBu
     Ok(files)
 }
 
+/// Collect all JPEG files directly from the input directory (non-recursive, ignores subdirectories).
+/// Returns a list of file paths. Does not delete non-JPEG files.
+fn collect_all_jpegs(input_dir: impl AsRef<Path>) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(input_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().is_some_and(|ext| {
+                matches!(ext.to_ascii_lowercase().to_str().unwrap_or(""), "jpeg" | "jpg")
+            })
+        {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
 /// Process multiple images in parallel using scoped threads
 ///
 /// # Arguments
@@ -409,6 +427,91 @@ pub fn process_directory(
         options,
         num_threads,
     ))
+}
+
+/// Process images from a directory and write all output files flat
+/// into a single output directory.
+///
+/// Reads JPEG files directly from `input_dir` (non-recursive, ignores subdirectories)
+/// and writes them into `output_dir` with the same filename stem but `.avif` extension.
+///
+/// # Arguments
+/// * `input_dir` - Directory containing JPEG files
+/// * `output_dir` - Directory where processed AVIF files will be written
+/// * `watermark` - Optional watermark to apply
+/// * `options` - Processing options
+/// * `num_threads` - Number of worker threads (None for auto-detect)
+pub fn process_directory_flat(
+    input_dir: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
+    watermark: Option<Watermark>,
+    options: ProcessingOptions,
+    num_threads: Option<usize>,
+) -> io::Result<BatchResult> {
+    let output_dir = output_dir.as_ref().to_path_buf();
+    let files = collect_all_jpegs(input_dir)?;
+
+    if files.is_empty() {
+        return Ok(BatchResult::default());
+    }
+
+    fs::create_dir_all(&output_dir)?;
+
+    // Preload all files into memory
+    let mut in_memory: Vec<(PathBuf, Vec<u8>)> = Vec::with_capacity(files.len());
+    let mut preload_failed = 0usize;
+
+    for path in &files {
+        match fs::read(path) {
+            Ok(bytes) => in_memory.push((path.clone(), bytes)),
+            Err(_) => preload_failed += 1,
+        }
+    }
+
+    if in_memory.is_empty() {
+        return Ok(BatchResult {
+            successful: 0,
+            failed: preload_failed,
+        });
+    }
+
+    let num_threads = num_threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap_or_else(|_| ThreadPoolBuilder::new().build().unwrap());
+
+    let watermark_ref = watermark.as_ref();
+
+    let (successful, failed_from_processing) = pool.install(|| {
+        in_memory
+            .into_par_iter()
+            .map(|(input_path, bytes)| {
+                let stem = input_path.file_stem().unwrap_or_default();
+                let output_path = output_dir.join(format!("{}.avif", stem.display()));
+                match process_image_bytes(&bytes, watermark_ref, options) {
+                    Ok(result) => {
+                        if fs::write(output_path, result).is_ok() {
+                            (1usize, 0usize)
+                        } else {
+                            (0usize, 1usize)
+                        }
+                    }
+                    Err(_) => (0usize, 1usize),
+                }
+            })
+            .reduce(|| (0usize, 0usize), |a, b| (a.0 + b.0, a.1 + b.1))
+    });
+
+    Ok(BatchResult {
+        successful,
+        failed: preload_failed + failed_from_processing,
+    })
 }
 
 pub fn process_directory_with_callback<F>(
